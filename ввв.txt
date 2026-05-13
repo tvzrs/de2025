@@ -1,0 +1,227 @@
+ISP
+apt-get update
+hostnamectl set-hostname ISP; exec bash
+apt-get install tzdata -y
+apt-get install mc
+timedatectl set-timezone Asia/Yekaterinburg 
+echo "172.16.1.1/28" > /etc/net/ifaces/ens19/ipv4address
+echo BOOTPROTO=static > /etc/net/ifaces/ens19/options
+echo TYPE=eth >> /etc/net/ifaces/ens19/options
+echo 172.16.2.1/28 > /etc/net/ifaces/ens20/ipv4address
+echo BOOTPROTO=static > /etc/net/ifaces/ens20/options
+echo TYPE=eth >> /etc/net/ifaces/ens20/options
+vim /etc/net/sysctl.conf (поменять forward на 1)
+apt-get install iptables
+iptables -t nat -A POSTROUTING -o ens18 -j MASQUERADE
+iptables-save -f /etc/sysconfig/iptables
+systemctl enable --now iptables
+
+HQ-RTR
+
+en 
+conf t
+hostname hq-rtr.net02tech.institute
+ntp timezone utc+5
+ip route 0.0.0.0/0 172.16.1.1
+int isp
+ip add 172.16.1.2/28
+ip nat outside
+int hq.100 
+ip add 192.168.0.1/27
+ip nat inside
+int hq.200 
+ip add 192.168.1.1/26
+ip nat inside
+int hq.999
+ip add 192.168.2.1/27
+ip nat inside
+port te0
+service-instance isp
+encapsulation untagged
+connect ip int isp
+ex
+port te1
+service-instance hq.100
+encapsulation dot1q 100
+rewrite pop 1
+con ip int hq.100
+ex
+service-instance hq.200
+encapsulation dot1q 200
+rewrite pop 1
+con ip int hq.200
+ex
+service-instance hq.999
+encapsulation dot1q 999
+rewrite pop 1
+con ip int hq.999
+ex
+ex
+router ospf 1
+passive-interface default
+no passive-interface tunnel.0
+network 192.168.0.0/27 area 0
+network 192.168.1.0/26 area 0
+network 192.168.2.0/27 area 0
+network 10.0.0.0/30 area 0
+exit
+int tunnel.0
+ip mtu 1400
+ip tunnel 172.16.1.2 172.16.2.2 mode gre
+ip address 10.0.0.1/30
+ip ospf authentication
+ip ospf authentication-key cisco
+ex
+ip pool DHCP 1
+range 192.168.1.3-192.168.1.33
+exit
+dhcp-server 1 
+pool DHCP 1
+mask 26
+gateway 192.168.1.1
+dns 192.168.0.10
+domain-search net02tech.institute 
+domain-name net02tech.institute
+ex
+ex
+ip nat pool NAT 192.168.0.1-192.168.0.30,192.168.1.1-192.168.1.62,192.168.2.1-192.168.2.30
+ip nat source dynamic inside-to-outside pool NAT overload int isp
+int hq.200
+dhcp-server 1
+
+
+BR-RTR
+
+en 
+conf t
+hostname br-rtr.net02tech.institute 
+ntp timezone utc+5
+ip route 0.0.0.0/0 172.16.2.1
+int isp
+ip add 172.16.2.2/28
+ip nat outside
+int br
+ip add 192.168.3.1/27
+ip nat inside
+port te0
+service-instance isp
+encapsulation untagged
+con ip int isp
+port te1
+service-instance br
+encapsulation untagged
+con ip int br
+ex
+ex
+router ospf 1
+network 192.168.3.0/27 area 0
+network 10.0.0.0/30 area 0
+passive-interface default
+no passive-interface tunnel.0
+ex
+int tunnel.0
+ip mtu 1400
+ip tunnel 172.16.2.2 172.16.1.2 mode gre
+ip address 10.0.0.2/30
+ip ospf authentication
+ip ospf authentication-key cisco
+exit
+
+ip nat pool NAT 192.168.3.1-192.168.3.30
+ip nat source dynamic inside-to-outside pool NAT overload int isp
+
+HQ-SRV
+
+hostnamectl set-hostaname hq-srv.net02tech.institute; exex bash
+timedatectl set-timezone Asia/Yekaterinburg 
+echo 192.168.0.10/27 > /etc/net/ifaces/ens18ipv4address
+echo BOOTPROTO=static > /etc/net/ifaces/ens19/options
+echo TYPE=eth >> /etc/net/ifaces/ens19/options
+
+useradd system_user -u 2002
+passwd system_user (KeyToNet42)
+usermod -aG wheel system_user
+visudo
+в файле:
+system_user ALL=(ALL) NOPASSWD:ALL
+
+mcedit /etc/openssh/sshd_config
+в файле:
+Port 2202
+AllowUsers system_user
+Banner /etc/openssh/bann
+MaxAuthTries 3
+mcedit /etc/openssh/bann
+Autorized access only
+systemctl enable --now sshd
+systemctl restart sshd
+
+mcedit /etc/resolv.conf
+в файлe:
+searсh net02tech.institute
+nameserver 192.168.0.10
+apt-get update
+apt-get install bind
+cd /etc/bind
+mcedit options.conf 
+меняем listen-on { 127.0.0.1; 192.168.0.10};
+forwarders { 8.8.8.8; };
+allow-query { any; };
+
+mcedit local.conf 
+в файле:
+
+zone "net02tech.institute" {
+	type master;
+	file "/etc/bind/zone/net02tech.institute";
+};
+zone "168.192.in-addr.arpa" {
+	type master;
+	file "/etc/bind/zone/168.192.in-addr.arpa";
+};
+
+cd zone
+cp localhost net02tech.institute
+cp 127.in-addr.arpa 168.192.in-addr.arpa
+mcedit net02tech.institute
+все localhost поменять на net02tech.institute
+адрес поменять на 192.168.0.10
+(фото 1)
+mcedit 168.192.in-addr.arpa
+все localhost поменять на net02tech.institute
+(фото 2)
+chown named. *
+systemctl enable –now bind
+systemctl restart bind
+
+BR-SRV
+
+hostnamectl set-hostaname br-srv.net02tech.institute; exeс bash
+timedatectl set-timezone Asia/Yekaterinburg 
+интерфейс днс это hqsrv
+
+useradd system_user -u 2002
+passwd system_user (KeyToNet42)
+usermod -aG wheel system_user
+visudo
+в файле:
+system_user ALL=(ALL) NOPASSWD:ALL
+	
+mcedit /etc/openssh/sshd_config
+в файле:
+Port 2202
+AllowUsers system_user
+Banner /etc/openssh/govno
+MaxAuthTries 3
+mcedit /etc/openssh/govno
+Autorized access only
+systemctl enable --now sshd
+systemctl restart sshd
+
+HQ-CLI
+
+hostnamectl set-hostaname hq-cli.net02tech.institute; exeс bash
+timedatectl set-timezone Asia/Yekaterinburg 
+
+
+я
